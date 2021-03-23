@@ -1,0 +1,80 @@
+version: "3.7"
+
+services:
+  controller:
+    image: yotanica/controller:v1.4.0
+    environment:
+      SERVICE_HOSTNAME: localhost
+      SERVICE_REGISTRY_MODE: "yaml" # YAML backed service registry
+      DATABASE_SOURCE: "dbname=magma user=magma password=magmapass host=10.202.6.68 sslmode=disable"
+      SQL_DIALECT: psql
+      SQL_DRIVER: postgres
+      SERVICE_REGISTRY_MODE: yaml
+    depends_on:
+      - fluentd
+    volumes:
+      - /magma/certs:/var/opt/magma/certs
+    command: ["/bin/sh", "-c", "/usr/local/bin/wait-for-it.sh -s -t 30 10.202.6.68:5432 && /usr/bin/supervisord"]
+    deploy:
+      placement:
+        constraints: [node.labels.controller == true]
+
+  nginx:
+    image: yotanica/nginx:v1.4.0
+    ports:
+      - 7443:8443/tcp   # controller GRPC port
+      - 7444:8444/tcp  # Bootstrapper port
+      - 9443:9443/tcp  # API/controller port
+    environment:
+      CONTROLLER_HOSTNAME: yourdomain.com
+      PROXY_BACKENDS: controller  # Uses Docker internal DNS for controller
+      RESOLVER: "127.0.0.11"
+      SERVICE_REGISTRY_MODE: yaml
+    volumes:
+      - /magma/certs:/var/opt/magma/certs
+    deploy:
+      placement:
+        constraints: [node.labels.controller == true]
+    depends_on:
+      - controller
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.3.1
+    environment:
+      - discovery.type=single-node
+    ports:
+      - 9200:9200
+      - 9300:9300
+    volumes:
+      - elasticsearch:/usr/share/elasticsearch/data
+    deploy:
+      placement:
+        constraints: [node.labels.controller == true]
+
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.3.1
+    ports:
+      - 5601:5601
+    links:
+      - elasticsearch
+
+  fluentd:
+    image: yotanica/fluentd:v1.4.0
+    links:
+      - elasticsearch
+    # 24224 for TLS secure forwarding, 24225 for unsecured docker logging
+    ports:
+      - 24224:24224
+      - 24224:24224/udp
+      - 24225:24225
+      - 24225:24225/udp
+    volumes:
+      - /magma/fluentd/conf:/fluentd/etc
+      - /magma/certs:/var/opt/magma/certs
+    deploy:
+      placement:
+        constraints: [node.labels.controller == true]
+
+volumes:
+  elasticsearch:
